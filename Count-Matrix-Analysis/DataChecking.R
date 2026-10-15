@@ -12,6 +12,8 @@ lib.size.threshold <- as.numeric(trimws(args[8]))
 gFilter.min.count <- as.numeric(trimws(args[9]))
 gFilter.min.prop <- as.numeric(trimws(args[10]))
 OutPrefix <- trimws(args[11])
+salmon.tpm <- trimws(args[12])
+filter.library <- as.logical(trimws(args[13]))
 
 message("Input arguments:")
 message("        Count matrix: ", counts.file)
@@ -24,6 +26,8 @@ message("        Library size threshold: ", lib.size.threshold)
 message("        Minimum count threshold for gene filtering: ", gFilter.min.count)
 message("        Minimum proportion of the samples for gene filtering: ", gFilter.min.prop)
 message("        Output files prefix: ", OutPrefix)
+message("        Salmon tpm normalised data location (if applicable)",salmon.tpm)
+message("        Filter Library by expression?",filter.library)
 cat("\n")
 ########################################################################
 #
@@ -81,6 +85,26 @@ plot_data$lib.size.pass <- (dge$samples$lib.size >= lib.size.threshold)
 pdf(file = paste0(OutPrefix , ".LibSize.pdf"),width = 20,height = 10)
 print(p)
 graphics.off()
+
+
+########################################################################
+#
+#          Filtering low library samples
+#
+########################################################################
+if(filter.library == TRUE){    
+    message("Filtering low library size samples")
+    low.lib.size <- dge$samples[which(dge$samples$lib.size < lib.size.threshold),]
+    write.csv(low.lib.size, file = paste0(OutPrefix , ".LowLibSize.csv")) # write csv of low library size filtered samples
+    counts <- counts[,!(colnames(counts) %in% rownames(low.lib.size))] # subset counts
+    pheno <- pheno[!(rownames(pheno) %in% rownames(low.lib.size)),] # subset pheno
+
+    message("New counts number = ", ncol(counts))
+    message("New pheno number = ", nrow(pheno))
+
+    rownames(plot_data) <- plot_data$sample #filter plot_data for consistency
+    plot_data <- plot_data[colnames(counts),]
+}
 ########################################################################
 #
 #          Filtering low count genes
@@ -99,21 +123,45 @@ counts <- counts[keep,]
 ########################################################################
 
 if(normalize.method == "cpm"){
-  message("Normalizing gene counts uisng cpm function in edgeR...")
+  message("Normalizing gene counts using cpm function in edgeR...")
   counts.norm <- edgeR::cpm(counts , log = TRUE)
   
-}else{
-  if(normalize.method == "vst"){
+  norm.label <- "counts per million"
+  norm.shorthand <- "CPM"
+}else if(normalize.method == "vst"){
+  
     message("Normalizing gene counts uisng vst method in DESeq2...")
     counts.norm <- DESeq2::varianceStabilizingTransformation(as.matrix(counts) , blind = T, fitType = "parametric")
-  }
+
+    norm.label <- "variance stabilizing transformation"
+    norm.shorthand <- "VST"
+
+}else if(normalize.method == "tpm_salmon"){
+    message("Loading pre-normalised TPM Salmon counts from",salmon.tpm)
+    counts.norm <- read.table(file = salmon.tpm, stringsAsFactors = F,header = T, row.names = 1,check.names=F)
+        if(!identical(colnames(counts.norm) , rownames(pheno))){
+            message("Warning message:\nColnames in the salmon tpm count matrix are not equal to the rownames in the phenotype file!\nShared names will be considered.")
+            index <- intersect(colnames(counts.norm), rownames(pheno))
+            message("Number of shared names: " , length(index))
+        if(length(index) < 1){
+          stop("There is no shared ID between Phenotype and Count data!")
+        }
+        counts.norm <- counts.norm[,index]
+        counts.norm <- counts.norm[rownames(counts),]
+        pheno <- pheno[index , ]
+      }
+      norm.label <- "transcripts per million"
+      norm.shorthand <- "TPM"
 }
+
+
+
 
 pdf(file = paste0(OutPrefix , ".Count.BoxPlot.pdf"),width = 16,height = 10)
 boxplot(as.matrix(counts),xlab = "Samples" , ylab= "Counts")
 title("Raw count")
-boxplot(as.matrix(counts.norm),xlab = "Samples" , ylab= paste0("Normalized counts (" , ifelse(normalize.method == "cpm" , "CPM" , "VST"),")"))
-title(paste0("Normalized counts (" , ifelse(normalize.method == "cpm" , "Count Per Million" , "variance stabilizing transformation"),")"))
+boxplot(as.matrix(counts.norm),xlab = "Samples" , ylab= paste0("Normalized counts (" , norm.shorthand,")"))
+title(paste0("Normalized counts (" , norm.label,")"))
 graphics.off()
 
 ######################################################################
